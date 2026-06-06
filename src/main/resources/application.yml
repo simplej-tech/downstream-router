@@ -1,0 +1,111 @@
+spring:
+  application:
+    name: standard-downstream-processor
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    producer:
+      transaction-id-prefix: standard-downstream-tx-
+      acks: all
+      properties:
+        enable.idempotence: true
+    consumer:
+      group-id: standard-downstream-processor
+      auto-offset-reset: earliest
+      isolation-level: read_committed
+      enable-auto-commit: false
+      max-poll-records: 1
+      properties:
+        max.poll.interval.ms: 300000
+    listener:
+      ack-mode: BATCH
+      type: batch
+      concurrency: 1
+
+server:
+  port: ${SERVER_PORT:8081}
+
+kafka:
+  encryption:
+    use-encryption: true
+    kms:
+      key-arn: ${KMS_KEY_ID:alias/demo}
+      region: ${AWS_REGION:us-east-1}
+      endpoint: ${KMS_ENDPOINT:http://localhost:4566}
+    cache:
+      ttl-minutes: 30
+      max-messages-per-key: 1000
+      capacity: 100
+  admin:
+    enabled: true
+    topic: cb-admin
+
+app:
+  topics:
+    standard-downstream: standard-downstream
+  bio:
+    host: ${BIO_HOST:localhost}
+    port: ${BIO_PORT:8080}
+    scheme: ${BIO_SCHEME:http}
+  match:
+    base-url: ${MATCH_URL:http://localhost:8080}
+  social:
+    base-url: ${SOCIAL_URL:http://localhost:8080}
+  backpressure:
+    enabled: true
+    resume-on-half-open: true
+    circuits:
+      - name: bio
+        domain: bio
+        consumer-ids: [standard-downstream-processor]
+      - name: match
+        domain: match
+        consumer-ids: [standard-downstream-processor]
+      - name: social
+        domain: social
+        consumer-ids: [standard-downstream-processor]
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,circuitbreakers,retries
+  endpoint:
+    health:
+      show-details: always
+  health:
+    circuitbreakers:
+      enabled: true
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      bio:
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        register-health-indicator: true
+        record-exceptions:
+          - com.example.bio.BioQueryException
+      match:
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        register-health-indicator: true
+      social:
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        register-health-indicator: true
+
+logging:
+  level:
+    com.example.downstream: INFO

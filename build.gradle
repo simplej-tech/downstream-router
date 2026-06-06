@@ -1,0 +1,90 @@
+plugins {
+    id 'java-library'
+    id 'java-test-fixtures'
+    alias(libs.plugins.spring.boot)
+}
+
+group = 'com.example'
+version = '0.1.0'
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs << '-parameters'
+}
+
+sourceSets {
+    integration {
+        java.srcDir 'src/test/integration/java'
+        resources.srcDir 'src/test/integration/resources'
+        compileClasspath += sourceSets.main.output + sourceSets.test.output + sourceSets.testFixtures.output
+        runtimeClasspath += sourceSets.main.output + sourceSets.test.output + sourceSets.testFixtures.output
+    }
+}
+
+configurations {
+    integrationImplementation.extendsFrom testImplementation, testFixturesApi, testFixturesImplementation
+    integrationRuntimeOnly.extendsFrom testRuntimeOnly
+}
+
+// Align the embedded broker (kafka_2.13 + server modules from spring-kafka-test) with the
+// encryption lib's pinned kafka-clients. spring-kafka-test 3.2.4 (Boot 3.3.5) is built against
+// 3.7.x; the encryption serializer/deserializer use only stable kafka-clients APIs, so running
+// against 3.7.1 in the embedded-broker test is safe.
+[configurations.integrationCompileClasspath, configurations.integrationRuntimeClasspath].each { cfg ->
+    cfg.resolutionStrategy.eachDependency { details ->
+        if (details.requested.group == 'org.apache.kafka') {
+            details.useVersion '3.7.1'
+        }
+    }
+}
+
+dependencies {
+    api platform(libs.spring.boot.deps)
+
+    api libs.spring.boot.starter
+    api libs.spring.boot.starter.json
+    api libs.spring.boot.starter.web
+    api libs.spring.boot.starter.actuator
+    api libs.spring.boot.starter.aop
+    api libs.resilience4j.spring.boot3
+    api libs.common.configs
+    api libs.bio.query.client
+    api libs.match.client
+    api libs.social.client
+    api libs.spring.kafka
+
+    annotationProcessor platform(libs.spring.boot.deps)
+    annotationProcessor libs.spring.boot.config.processor
+
+    testImplementation libs.spring.boot.starter.test
+
+    // IT framework shared with the integration source set — WireMock-backed stubs + fixtures.
+    testFixturesApi libs.wiremock
+
+    integrationImplementation libs.spring.kafka.test
+    integrationImplementation libs.awaitility
+}
+
+tasks.register('integrationTest', Test) {
+    group = 'verification'
+    description = 'Runs circuit-breaker / backpressure integration tests.'
+    testClassesDirs = sourceSets.integration.output.classesDirs
+    classpath = sourceSets.integration.runtimeClasspath
+    useJUnitPlatform()
+    shouldRunAfter test
+    systemProperty 'junit.jupiter.execution.timeout.default', '90s'
+}
