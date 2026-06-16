@@ -81,6 +81,9 @@ With async + virtual threads, the pause is requested as soon as a CB transitions
 
 ## Integration tests
 
+> Choosing a mock (WireMock vs MockServer) for ITs and the deployed e2e mock: see
+> [`docs/wiremock-vs-mockserver.md`](docs/wiremock-vs-mockserver.md).
+
 Layout:
 - `src/main/...` — production code.
 - `src/testFixtures/java/com/example/downstream/it/...` — shared IT framework (WireMock stubs, response fixtures, scenario orchestrator). Reused by anyone consuming this module's testFixtures.
