@@ -150,6 +150,6 @@ In this repo:
 - MockServer ITs (Testcontainers): `src/test/integration/.../it/{StandardDownstreamProcessorCircuitBreakerMockServerIT,RateLimitThrottlingMockServerIT}.java`
 - MockServer fixtures: `src/testFixtures/.../it/mockserver/*`
 
-Deployed-mock artifacts (live outside this repo, in the playground/deployment area):
-- Deployed WireMock: `deploy/wiremock/` (Dockerfile, baked mappings, Terraform module, Bruno collection)
-- Deployed MockServer (minimal): `deploy/mockserver/minimal/` (Dockerfile + init JSON)
+Deployed-mock artifacts (live outside this repo):
+- Deployed WireMock: its own repo — [`simplej-tech/downstream-api-mock`](https://github.com/simplej-tech/downstream-api-mock) (Dockerfile, baked mappings, reusable Terraform module + a dev environment, Bruno collection, QE runbook)
+- Deployed MockServer (minimal): `deploy/mockserver/minimal/` (Dockerfile + init JSON, a playground-root scratch artifact)
