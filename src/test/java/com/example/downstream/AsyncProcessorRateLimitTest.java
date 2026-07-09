@@ -40,7 +40,7 @@ class AsyncProcessorRateLimitTest {
         RateLimiterWrapper socialRl = mock(RateLimiterWrapper.class);
         DownstreamRateLimiters limiters = new DownstreamRateLimiters(bioRl, matchRl, socialRl);
 
-        AsyncProcessor processor = new AsyncProcessor(bio, match, social, limiters);
+        AsyncProcessor processor = new AsyncProcessor(bio, match, social, limiters, true);
         processor.processRecord(new RequestMessage("id1", "standard", "payload"));
 
         InOrder order = inOrder(bioRl, bio, matchRl, match, socialRl, social);

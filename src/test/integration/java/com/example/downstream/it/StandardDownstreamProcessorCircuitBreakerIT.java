@@ -72,6 +72,9 @@ import static org.awaitility.Awaitility.await;
                 "resilience4j.circuitbreaker.instances.social.wait-duration-in-open-state=1s",
                 "resilience4j.circuitbreaker.instances.social.permitted-number-of-calls-in-half-open-state=2",
                 "resilience4j.circuitbreaker.instances.social.automatic-transition-from-open-to-half-open-enabled=true"
+                // app.social.enabled is set from the SOCIAL_ENABLED constant in @DynamicPropertySource
+                // below (a class can't reference its own field in its own class-level annotation).
+                //
                 // Async executor determinism: prod's KafkaAppConfig uses a virtual-thread-per-task
                 // executor (unbounded concurrency). For tests we activate the single-thread-async
                 // profile and substitute SingleThreadAsyncConfig below so the bio/match/social counts
@@ -79,7 +82,7 @@ import static org.awaitility.Awaitility.await;
         }
 )
 @EmbeddedKafka(
-        topics = {"standard-downstream"},
+        topics = {"standard-downstream", "downstream-results", "downstream-dlt"},
         partitions = 1,
         brokerProperties = {
                 "transaction.state.log.replication.factor=1",
@@ -87,6 +90,11 @@ import static org.awaitility.Awaitility.await;
                 "offsets.topic.replication.factor=1"
         })
 class StandardDownstreamProcessorCircuitBreakerIT {
+
+    // Single switch driving both the app's app.social.enabled flag (set in @DynamicPropertySource) and
+    // the social assertions below. true → social is the last downstream call and is verified; false →
+    // social is skipped and the completion barrier + verification fall back to match (the new last call).
+    private static final boolean SOCIAL_ENABLED = true;
 
     private static final WireMockServer WIREMOCK = new WireMockServer(options().dynamicPort());
     private static final DownstreamStubs STUBS;
@@ -108,6 +116,7 @@ class StandardDownstreamProcessorCircuitBreakerIT {
         registry.add("app.bio.scheme", () -> "http");
         registry.add("app.match.base-url", () -> "http://localhost:" + WIREMOCK.port());
         registry.add("app.social.base-url", () -> "http://localhost:" + WIREMOCK.port());
+        registry.add("app.social.enabled", () -> SOCIAL_ENABLED);
     }
 
     @Autowired
@@ -128,11 +137,11 @@ class StandardDownstreamProcessorCircuitBreakerIT {
         CircuitBreaker match = circuitBreakerRegistry.circuitBreaker("match");
         CircuitBreaker social = circuitBreakerRegistry.circuitBreaker("social");
 
-        // Phase 1 — all three downstreams healthy: breakers closed, listener running.
-        // Await on social (the LAST call) to confirm full processing of warm-1.
+        // Phase 1 — downstreams healthy: breakers closed, listener running.
+        // Await the LAST call to confirm full processing of warm-1 (social when enabled, else match).
         Scenarios.allHealthy(STUBS);
         publish("warm-1");
-        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> STUBS.social.verifyCalled(1));
+        awaitProcessed(1);
         assertThat(bio.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
         assertThat(match.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
         assertThat(social.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
@@ -141,7 +150,11 @@ class StandardDownstreamProcessorCircuitBreakerIT {
         STUBS.match.verifyCalled(1);
         STUBS.bio.verifyCalledFor(expectedBioRequest("warm-1"));
         STUBS.match.verifyCalledFor(expectedMatchRequest("warm-1"));
-        STUBS.social.verifyCalledFor(expectedSocialRequest("warm-1"));
+        if (SOCIAL_ENABLED) {
+            STUBS.social.verifyCalledFor(expectedSocialRequest("warm-1"));
+        } else {
+            STUBS.social.verifyNotCalled();
+        }
 
         // Phase 2 — bio fails: bio CB opens, listener pauses. Publish exactly the minimum number
         // of messages that trips the CB (3, because phase-1's warm-1 success is still in the window:
@@ -179,11 +192,27 @@ class StandardDownstreamProcessorCircuitBreakerIT {
         publish("probe-1");
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                 assertThat(bio.getState()).isEqualTo(CircuitBreaker.State.CLOSED));
-        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> STUBS.social.verifyCalled(2));
+        awaitProcessed(2);
         STUBS.bio.verifyCalled(2);
         STUBS.match.verifyCalled(2);
         STUBS.bio.verifyCalledFor(expectedBioRequest("probe-0"));
         STUBS.bio.verifyCalledFor(expectedBioRequest("probe-1"));
+        if (!SOCIAL_ENABLED) {
+            STUBS.social.verifyNotCalled();
+        }
+    }
+
+    /**
+     * Waits for full processing of {@code count} cumulative messages by awaiting the LAST downstream
+     * call in the chain: social when {@link #SOCIAL_ENABLED}, else match (which becomes the last call
+     * once social is gated off). Used as the per-phase completion barrier.
+     */
+    private void awaitProcessed(int count) {
+        if (SOCIAL_ENABLED) {
+            await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> STUBS.social.verifyCalled(count));
+        } else {
+            await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> STUBS.match.verifyCalled(count));
+        }
     }
 
     private boolean containerPaused() {

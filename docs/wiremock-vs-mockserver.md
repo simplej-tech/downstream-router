@@ -147,8 +147,10 @@ the ITs and the deployed mock then use different stub APIs.
 In this repo:
 - WireMock ITs: `src/test/integration/.../it/{StandardDownstreamProcessorCircuitBreakerIT,RateLimitThrottlingIT}.java`
 - WireMock fixtures: `src/testFixtures/.../it/{stubs,fixtures,Scenarios}`
-- MockServer ITs (Testcontainers): `src/test/integration/.../it/{StandardDownstreamProcessorCircuitBreakerMockServerIT,RateLimitThrottlingMockServerIT}.java`
-- MockServer fixtures: `src/testFixtures/.../it/mockserver/*`
+
+> The repo previously also carried MockServer IT twins (`*MockServerIT` + `it/mockserver/*` fixtures,
+> run out-of-process via Testcontainers) as a parity evaluation. They were removed — the ITs now use
+> WireMock only. The comparison below is retained as the rationale for that choice.
 
 Deployed-mock artifacts (live outside this repo):
 - Deployed WireMock: its own repo — [`simplej-tech/downstream-api-mock`](https://github.com/simplej-tech/downstream-api-mock) (Dockerfile, baked mappings, reusable Terraform module + a dev environment, Bruno collection, QE runbook)

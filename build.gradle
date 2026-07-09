@@ -72,25 +72,11 @@ dependencies {
 
     testImplementation libs.spring.boot.starter.test
 
-    // Declared before wiremock-standalone so the real networknt json-schema-validator (whose
-    // jsv-messages bundle has the 'crossEdits' key MockServer's client needs) precedes wiremock's
-    // shaded copy (which lacks it) on the classpath — otherwise the MockServer client crashes.
-    testFixturesApi 'com.networknt:json-schema-validator:1.0.76'
-
     // IT framework shared with the integration source set — WireMock-backed stubs + fixtures.
     testFixturesApi libs.wiremock
 
-    // Parallel MockServer-backed stubs + fixtures (it/mockserver/*) for the *MockServerIT tests.
-    // MockServer runs OUT-OF-PROCESS in a Testcontainers container (its own intact classpath); the
-    // test JVM only carries the lightweight client, so MockServer's deps (json-schema-validator,
-    // Jackson, its SLF4J→JUL binding) never collide with Spring Boot's. Embedding it in-process
-    // (mockserver-netty) does collide — SLF4J binding + a 'crossEdits' schema-validation crash.
-    testFixturesApi 'org.mock-server:mockserver-client-java:5.15.0'
-
     integrationImplementation libs.spring.kafka.test
     integrationImplementation libs.awaitility
-    // Runs the MockServer image for the *MockServerIT tests (version managed by the Spring Boot platform).
-    integrationImplementation 'org.testcontainers:mockserver'
 }
 
 tasks.register('integrationTest', Test) {
@@ -101,12 +87,4 @@ tasks.register('integrationTest', Test) {
     useJUnitPlatform()
     shouldRunAfter test
     systemProperty 'junit.jupiter.execution.timeout.default', '90s'
-    // The *MockServerIT tests use Testcontainers (needs Docker). On bleeding-edge Docker daemons that
-    // reject docker-java's default API version, export DOCKER_API_VERSION (e.g. 1.44) and it's
-    // forwarded to the test JVM; on a normal daemon Testcontainers negotiates and nothing is needed.
-    def dockerApiVersion = System.getenv('DOCKER_API_VERSION')
-    if (dockerApiVersion) {
-        environment 'DOCKER_API_VERSION', dockerApiVersion
-        systemProperty 'api.version', dockerApiVersion
-    }
 }

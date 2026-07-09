@@ -7,21 +7,32 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 /**
- * Consumes the standard-downstream topic, decrypts, parses, and hands each message off to
- * {@link AsyncProcessor#processRecord(RequestMessage)} for the downstream client calls. The listener
- * itself only owns the consumer-thread work (decrypt + parse + dispatch); the slow HTTP path runs on
- * the async executor.
+ * Consumes the standard-downstream topic, decrypts + parses each record, fans the whole batch out to
+ * {@link AsyncProcessor#processRecord(RequestMessage)} (bio → match → social) on the async executor,
+ * awaits every result, then produces each to the results topic ({@code app.topics.results}) or the
+ * dead-letter topic ({@code app.topics.dlt}) depending on whether processing failed.
  *
- * <p>{@code @Transactional("kafkaTransactionManager")} ties the offset commit to the Kafka producer
- * transaction. With the async dispatch this is at-most-once for downstream calls — see
- * {@link AsyncProcessor} for the tradeoff.
+ * <p>Async fan-out + aggregation: each record yields a {@code CompletableFuture<AsyncResult>}; the
+ * listener joins them all ({@code allOf(...).join()}) so the downstream calls across a batch run in
+ * parallel, but the produces still happen on the listener thread inside
+ * {@code @Transactional("kafkaTransactionManager")} — so the offset commit and all result/DLT
+ * publishes are one atomic Kafka transaction (exactly-once). Downstream failures never fail the
+ * future ({@link AsyncProcessor} carries them in {@link AsyncResult#exception()}), so a bad response
+ * is routed to the DLT and still commits rather than rolling the batch back and replaying; only
+ * infra/produce errors roll back and redeliver. Result values ride the same encrypting serializer as
+ * every other message.
  */
 @Component
 public class StandardDownstreamListener {
@@ -30,15 +41,27 @@ public class StandardDownstreamListener {
 
     private final ObjectMapper mapper;
     private final AsyncProcessor processor;
+    private final KafkaTemplate<String, byte[]> kafkaTemplate;
+    private final String resultsTopic;
+    private final String dltTopic;
 
-    public StandardDownstreamListener(ObjectMapper mapper, AsyncProcessor processor) {
+    public StandardDownstreamListener(ObjectMapper mapper,
+                                      AsyncProcessor processor,
+                                      KafkaTemplate<String, byte[]> kafkaTemplate,
+                                      @Value("${app.topics.results}") String resultsTopic,
+                                      @Value("${app.topics.dlt}") String dltTopic) {
         this.mapper = mapper;
         this.processor = processor;
+        this.kafkaTemplate = kafkaTemplate;
+        this.resultsTopic = resultsTopic;
+        this.dltTopic = dltTopic;
     }
 
     @KafkaListener(id = "standard-downstream-processor", topics = "${app.topics.standard-downstream}")
     @Transactional("kafkaTransactionManager")
     public void onBatch(List<ConsumerRecord<String, Result<byte[], Pair<Exception, byte[]>>>> records) throws Exception {
+        // Fan out: one async processing future per decodable record.
+        List<CompletableFuture<AsyncResult>> futures = new ArrayList<>();
         for (ConsumerRecord<String, Result<byte[], Pair<Exception, byte[]>>> record : records) {
             Result<byte[], Pair<Exception, byte[]>> result = record.value();
             if (result == null) {
@@ -52,7 +75,20 @@ public class StandardDownstreamListener {
                 continue;
             }
             RequestMessage message = mapper.readValue(plaintext, RequestMessage.class);
-            processor.processRecord(message);
+            futures.add(processor.processRecord(message));
+        }
+
+        // Aggregate: await the whole batch, then collect the per-record results.
+        CompletableFuture<List<AsyncResult>> allResults =
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                        .thenApply(v -> futures.stream().map(CompletableFuture::join).collect(Collectors.toList()));
+        List<AsyncResult> results = allResults.join();
+
+        // Route: DLT on failure, results topic otherwise. All within the active transaction, so these
+        // publishes commit atomically with the consumer offsets.
+        for (AsyncResult res : results) {
+            String topic = res.exception() != null ? dltTopic : resultsTopic;
+            kafkaTemplate.send(topic, res.key(), mapper.writeValueAsBytes(res.result()));
         }
     }
 }
