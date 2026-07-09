@@ -58,7 +58,7 @@ import static org.awaitility.Awaitility.await;
                 "kafka.rate-limit.social=1000.0"
         })
 @EmbeddedKafka(
-        topics = {"standard-downstream"},
+        topics = {"standard-downstream", "downstream-results", "downstream-dlt"},
         partitions = 1,
         brokerProperties = {
                 "transaction.state.log.replication.factor=1",
